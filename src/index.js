@@ -15,6 +15,7 @@ import { BotRegistry, expandPath, normalizeBotId } from "./registry.js"
 import { CrewAssigner } from "./assign.js"
 import { Expedition } from "./expedition.js"
 import { GoalStore } from "./goal.js"
+import { Gate } from "./gate.js"
 import { buildInbox, inboxSummary } from "./inbox.js"
 
 export const name = "@chendaleiq/dsh-crew"
@@ -132,14 +133,16 @@ export function apply(ctx, rawConfig = {}) {
   if (!config.enabled) return
 
   const registry = new BotRegistry(config.dataDir)
+  /** 派活与目标循环共用同一个并发配额（各自计数会让上限翻倍）。 */
+  const gate = new Gate(config.maxConcurrent)
   const log = (message) => ctx.logger?.info?.(message)
   const warn = (message) => ctx.logger?.warn?.(message)
 
   /** 派活的执行者。宿主没给 agents 服务时它自己会说不可用，不让面板干等。 */
-  const assigner = new CrewAssigner({ ctx, registry, config, log, warn: warn ?? (() => {}) })
+  const assigner = new CrewAssigner({ ctx, registry, config, gate, log, warn: warn ?? (() => {}) })
   /** 目标循环：自进化模式的引擎，和派活共用 turn.js 那条执行路径。 */
   const goals = new GoalStore(registry)
-  const expedition = new Expedition({ ctx, registry, goals, config, log, warn: warn ?? (() => {}) })
+  const expedition = new Expedition({ ctx, registry, goals, config, gate, log, warn: warn ?? (() => {}) })
 
   /** 渲染侧与命令行共用的服务面：花名册 + 记忆 + 派活。 */
   const service = {
@@ -166,6 +169,36 @@ export function apply(ctx, rawConfig = {}) {
   if (typeof ctx.effect === "function") {
     ctx.effect(() => ctx.provide("dshCrew", service), "dsh-crew: host service")
   }
+
+  /**
+   * 启动对账：上一次进程死掉时，state.json 里可能还留着 running/starting。
+   * 不清理的话，面板会永远显示"在忙"，收件箱也不会报——等于静默丢了一件事。
+   * 这里把它们标成 interrupted，交给人看。
+   */
+  const reconcile = async () => {
+    try {
+      const state = await registry.readState()
+      const stale = Object.entries(state.bots ?? {}).filter(
+        ([, entry]) => entry?.state === "running" || entry?.state === "starting",
+      )
+      if (stale.length === 0) return 0
+      for (const [botId, entry] of stale) {
+        state.bots[botId] = {
+          ...entry,
+          state: "interrupted",
+          error: "上一次运行没走完就结束了（DSH 重启或崩溃）；这一轮的状态未知，重跑一次即可",
+          endedAt: new Date().toISOString(),
+        }
+      }
+      await registry.writeState(state)
+      warn(`dsh-crew: 启动对账 · ${stale.length} 条残留运行态改判为 interrupted`)
+      return stale.length
+    } catch (error) {
+      warn(`dsh-crew: 启动对账失败 ${error instanceof Error ? error.message : String(error)}`)
+      return 0
+    }
+  }
+  void reconcile()
 
   const mount = (hostCtx) => {
     const server = hostCtx.webServer
@@ -217,6 +250,7 @@ export function apply(ctx, rawConfig = {}) {
                 goals: goalSummaries,
                 inbox,
                 inboxSummary: inboxSummary(inbox),
+                gate: gate.snapshot(),
               })
               return
             }
@@ -338,6 +372,12 @@ export function apply(ctx, rawConfig = {}) {
             }
             if (request.method === "POST") {
               const payload = await readBody(request)
+              // 循环正在跑的时候不许改目标：改完会被循环的下一轮 save 冲掉，白改。
+              const target = normalizeBotId(payload?.botId)
+              if (expedition.status(target).running) {
+                answer(response, 409, { ok: false, error: "这个 Bot 正在磨目标，先停掉再改目标（否则改动会被循环覆盖）" })
+                return
+              }
               const goal = await goals.create({
                 botId: payload?.botId,
                 objective: payload?.objective,

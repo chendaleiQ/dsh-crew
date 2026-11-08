@@ -86,7 +86,7 @@ export function roundExtra(goal, round, acceptance) {
 }
 
 export class Expedition {
-  constructor({ ctx, registry, goals, config, log = () => {}, warn = () => {}, pollMs = 1_000, gapMs = ROUND_GAP_MS }) {
+  constructor({ ctx, registry, goals, config, gate = null, log = () => {}, warn = () => {}, pollMs = 1_000, gapMs = ROUND_GAP_MS }) {
     this.ctx = ctx
     this.registry = registry
     this.goals = goals
@@ -95,6 +95,8 @@ export class Expedition {
     this.warn = warn
     this.pollMs = pollMs
     this.gapMs = gapMs
+    /** 与派活共用的并发闸门（一块跑，才不会把上限翻倍）。 */
+    this.gate = gate
     /** botId -> { stop, round, state } */
     this.runs = new Map()
   }
@@ -120,9 +122,6 @@ export class Expedition {
    */
   async start(botId, { maxRounds = 20 } = {}) {
     if (!this.available()) throw new Error("宿主没有 agents 服务，无法跑目标")
-    if (this.activeCount >= this.config.maxConcurrent) {
-      throw new Error(`并发已满（上限 ${this.config.maxConcurrent}），等一件跑完再开`)
-    }
     if (this.status(botId).running) throw new Error("这个 Bot 已经在磨目标了")
 
     const bot = await this.registry.read(botId)
@@ -134,10 +133,12 @@ export class Expedition {
       throw new Error("目标没有验收条件，我无法判断做到没有——先补上验收再点火")
     }
 
+    if (this.gate !== null) this.gate.acquire(botId)
     const run = { stop: false, round: 0, state: "running", stopReason: "" }
     this.runs.set(botId, run)
     const done = this.#loop(botId, maxRounds, run).finally(() => {
       run.state = run.state === "running" ? "stopped" : run.state
+      if (this.gate !== null) this.gate.release(botId)
     })
     return { accepted: true, done }
   }

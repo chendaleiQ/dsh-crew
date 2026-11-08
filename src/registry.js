@@ -206,10 +206,21 @@ export class BotRegistry {
     }
   }
 
-  /** 追加一条带时间戳的记忆。空文本忽略。 */
+  /** 档案还在不在（删档后各种后台写操作都要先问这一句，否则会把目录重新建出来）。 */
+  async exists(id) {
+    try {
+      await readFile(this.botFile(id), "utf8")
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 追加一条带时间戳的记忆。空文本忽略；档案已删则不写（避免复活一个空壳 Bot）。 */
   async appendMemory(id, text) {
     const body = typeof text === "string" ? text.trim() : ""
     if (body === "") return false
+    if (!(await this.exists(id))) return false
     await this.ensure()
     const line = `\n## ${new Date().toISOString().slice(0, 16).replace("T", " ")}\n\n${body}\n`
     const previous = await this.readMemory(id)
@@ -230,6 +241,7 @@ export class BotRegistry {
    */
   async compactMemory(id, limits = {}) {
     const botId = normalizeBotId(id)
+    if (!(await this.exists(botId))) return { changed: false, summary: "档案已删除，跳过压缩" }
     const text = await this.readMemory(botId)
     const { needsCompaction, compactMemory } = await import("./memory.js")
     const verdict = needsCompaction(text, limits)

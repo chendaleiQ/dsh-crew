@@ -10,6 +10,7 @@ import { join } from "node:path"
 import test from "node:test"
 
 import {
+  GOAL_LIMITS,
   GoalStore,
   addDeadEnd,
   checkAcceptance,
@@ -162,4 +163,26 @@ test("GoalStore 落盘能读回，坏 JSON 明确报错", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test("病态输入不许把循环拖死：目标与验收都有规模上限", () => {
+  const goal = emptyGoal({
+    botId: "w",
+    objective: "啊".repeat(50_000),
+    acceptance: Array.from({ length: 200 }, (_, index) => ({ kind: "command", cmd: `test ${index}` })),
+    constraints: Array.from({ length: 200 }, (_, index) => `约束 ${index}`),
+  })
+  assert.equal(goal.objective.length, GOAL_LIMITS.objectiveChars)
+  assert.equal(goal.acceptance.length, GOAL_LIMITS.acceptance)
+  assert.equal(goal.constraints.length, GOAL_LIMITS.constraints)
+})
+
+test("验收条件缺字段的条目被丢掉，而不是变成一定会过的空检查", () => {
+  const goal = emptyGoal({
+    botId: "w",
+    objective: "x",
+    acceptance: [{ kind: "file" }, { kind: "command", cmd: "  " }, { kind: "weird" }, { kind: "manual" }],
+  })
+  assert.equal(goal.acceptance.length, 1)
+  assert.equal(goal.acceptance[0].kind, "manual")
 })

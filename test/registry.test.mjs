@@ -98,3 +98,20 @@ test("有效工具：bash 只由 allowBash 决定，数组里写了也不算", (
   // 默认档案给了只读+写入，但绝不默认给 bash
   assert.ok(!effectiveTools(normalizeBot({ id: "d" })).includes("bash"))
 })
+
+test("删档之后写记忆不会把 Bot 复活（只留个 memory.md 的空壳最坑）", async () => {
+  await withRegistry(async (registry) => {
+    await registry.save({ id: "gone", name: "已删" })
+    assert.equal(await registry.exists("gone"), true)
+    await registry.remove("gone")
+    assert.equal(await registry.exists("gone"), false)
+
+    assert.equal(await registry.appendMemory("gone", "这条不该写进去"), false)
+    const { existsSync } = await import("node:fs")
+    assert.equal(existsSync(registry.botDir("gone")), false, "目录不该被重建")
+
+    const compacted = await registry.compactMemory("gone")
+    assert.equal(compacted.changed, false)
+    assert.match(compacted.summary, /已删除/)
+  })
+})

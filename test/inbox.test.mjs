@@ -92,3 +92,15 @@ test("摘要区分「要动手」和「只是知会」", () => {
   assert.equal(inboxSummary([{ level: "action" }, { level: "notice" }]), "1 件等你处理，另有 1 条知会")
   assert.equal(inboxSummary([{ level: "action" }, { level: "action" }]), "2 件等你处理")
 })
+
+test("进程重启留下的 interrupted 也要报：跑到一半没人管的事不能沉底", () => {
+  const items = buildInbox({
+    bots,
+    runtime: { a: { state: "interrupted", error: "上一次运行没走完就结束了", endedAt: "2026-11-08T10:00:00Z" } },
+    goals: {},
+  })
+  assert.equal(items.length, 1)
+  assert.equal(items[0].level, "action")
+  assert.match(items[0].title, /被中断/)
+  assert.match(items[0].detail, /没走完/)
+})

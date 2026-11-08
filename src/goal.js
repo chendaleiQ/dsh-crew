@@ -45,14 +45,20 @@ function normalizeCheck(raw) {
   return null
 }
 
+/** 规模上限：验收条件太多等于每轮都要跑一大堆命令，把一轮拖成十分钟。 */
+export const GOAL_LIMITS = { objectiveChars: 2_000, acceptance: 20, constraints: 20 }
+
 /** 建一个空目标。真正的目标是用户给的，这里只保证形状完整。 */
 export function emptyGoal({ botId, objective, acceptance = [], constraints = [], budget = {} } = {}) {
   const now = new Date().toISOString()
+  const text = String(objective ?? "").trim()
   return {
     botId: normalizeBotId(botId),
-    objective: String(objective ?? "").trim(),
-    acceptance: acceptance.map(normalizeCheck).filter(Boolean),
-    constraints: Array.isArray(constraints) ? constraints.map((item) => String(item).trim()).filter(Boolean) : [],
+    objective: text.length > GOAL_LIMITS.objectiveChars ? text.slice(0, GOAL_LIMITS.objectiveChars) : text,
+    acceptance: (Array.isArray(acceptance) ? acceptance : []).slice(0, GOAL_LIMITS.acceptance).map(normalizeCheck).filter(Boolean),
+    constraints: Array.isArray(constraints)
+      ? constraints.map((item) => String(item).trim()).filter(Boolean).slice(0, GOAL_LIMITS.constraints)
+      : [],
     status: "active",
     rounds: [],
     deadEnds: [],

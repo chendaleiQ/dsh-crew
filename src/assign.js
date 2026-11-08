@@ -28,13 +28,15 @@ export class CrewAssigner {
    * @param {(line: string) => void} [options.warn]
    * @param {number} [options.pollMs]  测试用，可把轮询间隔调小
    */
-  constructor({ ctx, registry, config, log = () => {}, warn = () => {}, pollMs = 1_000 }) {
+  constructor({ ctx, registry, config, gate = null, log = () => {}, warn = () => {}, pollMs = 1_000 }) {
     this.ctx = ctx
     this.registry = registry
     this.config = config
     this.log = log
     this.warn = warn
     this.pollMs = pollMs
+    /** 与目标循环共用的并发闸门；没有就退回自己的计数（单测场景）。 */
+    this.gate = gate
     /** 正在跑的派活：taskId -> { botId, sessionId, cancelled } */
     this.running = new Map()
   }
@@ -55,9 +57,6 @@ export class CrewAssigner {
    */
   async start({ botId, task, extra = "", onProgress = () => {} }) {
     if (!this.available()) throw new Error("宿主没有 agents 服务，无法派活")
-    if (this.activeCount >= this.config.maxConcurrent) {
-      throw new Error(`并发已满（上限 ${this.config.maxConcurrent}），等一件跑完再派`)
-    }
 
     const bot = await this.registry.read(botId)
     if (bot.fault) throw new Error(`这个 Bot 的档案是坏的：${bot.faultReason}`)
@@ -83,11 +82,14 @@ export class CrewAssigner {
       result: "",
       error: "",
     })
+    // 并发额度由「派活 + 目标循环」共享：各自计数会让上限翻倍。
+    if (this.gate !== null) this.gate.acquire(taskId)
     this.running.set(taskId, entry)
     onProgress({ phase: "created", taskId, sessionId })
 
     const done = this.#run({ entry, bot, brief, system, memoryClipped: system.memoryClipped }).finally(() => {
       this.running.delete(taskId)
+      if (this.gate !== null) this.gate.release(taskId)
     })
 
     return { taskId, sessionId, done }

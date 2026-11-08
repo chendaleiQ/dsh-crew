@@ -13,6 +13,9 @@ import { join } from "node:path"
 import test from "node:test"
 
 import { CrewAssigner } from "../src/assign.js"
+import { Expedition } from "../src/expedition.js"
+import { Gate } from "../src/gate.js"
+import { GoalStore } from "../src/goal.js"
 import { BotRegistry } from "../src/registry.js"
 
 const CONFIG = { maxConcurrent: 2, taskTimeoutMs: 2_000 }
@@ -134,12 +137,38 @@ test("没写工作目录的 Bot 不许派活", async () => {
 test("超过并发上限直接拒，不会排队到天荒地老", async () => {
   await withCrew(async ({ registry }) => {
     const { ctx } = makeCtx({ scripts: ["hang", "hang"] })
-    const assigner = new CrewAssigner({ ctx, registry, config: { ...CONFIG, maxConcurrent: 1 }, pollMs: 5 })
+    const gate = new Gate(1)
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, gate, pollMs: 5 })
     const first = await assigner.start({ botId: "writer", task: "第一件" })
     assert.equal(assigner.activeCount, 1)
+    assert.equal(gate.active, 1)
     await assert.rejects(() => assigner.start({ botId: "writer", task: "第二件" }), /并发已满/)
     await assigner.cancel(first.taskId)
     await first.done
+    assert.equal(gate.active, 0, "跑完必须把额度还回来")
+  })
+})
+
+test("派活与目标循环共享同一份额度：派活占着时目标也开不了", async () => {
+  await withCrew(async ({ registry, dir }) => {
+    const { ctx } = makeCtx({ scripts: ["hang"] })
+    const gate = new Gate(1)
+    const goals = new GoalStore(registry)
+    await goals.create({ botId: "writer", objective: "把事做完", acceptance: [{ kind: "manual", hint: "看一眼" }] })
+
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, gate, pollMs: 5 })
+    const expedition = new Expedition({ ctx, registry, goals, config: CONFIG, gate, pollMs: 5, gapMs: 5 })
+
+    const first = await assigner.start({ botId: "writer", task: "占住额度" })
+    await assert.rejects(() => expedition.start("writer", { maxRounds: 1 }), /并发已满/, "两条路径必须共用配额")
+    await assigner.cancel(first.taskId)
+    await first.done
+
+    // 还回来之后目标就能开了
+    const fired = await expedition.start("writer", { maxRounds: 1 })
+    expedition.stop("writer")
+    await fired.done
+    assert.equal(gate.active, 0)
   })
 })
 

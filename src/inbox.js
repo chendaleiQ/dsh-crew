@@ -10,7 +10,7 @@
  */
 
 /** 任务类结局里，需要人看一眼的那些。done 不算，cancelled 也不算（那是你主动停的）。 */
-const TASK_NEEDS_YOU = new Set(["failed", "empty", "timeout"])
+const TASK_NEEDS_YOU = new Set(["failed", "empty", "timeout", "interrupted"])
 
 /** 目标类状态里，需要人的那些。 */
 const GOAL_NEEDS_YOU = new Set(["needs-human"])
@@ -40,7 +40,14 @@ export function buildInbox({ bots = [], runtime = {}, goals = {} } = {}) {
 
     // 1) 派活失败 / 空产出 / 超时：这些「不成功」不能被当成完成。
     if (TASK_NEEDS_YOU.has(run.state)) {
-      const label = run.state === "failed" ? "派活失败" : run.state === "empty" ? "本轮没有产出" : "派活超时"
+      const label =
+        run.state === "failed"
+          ? "派活失败"
+          : run.state === "empty"
+            ? "本轮没有产出"
+            : run.state === "interrupted"
+              ? "上次跑到一半被中断"
+              : "派活超时"
       items.push({
         botId: bot.id,
         name: bot.name,

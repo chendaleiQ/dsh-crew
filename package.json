@@ -22,7 +22,8 @@
     "README.md",
     "README.en.md",
     "LICENSE",
-    "icon.svg"
+    "icon.svg",
+    "CHANGELOG.md"
   ],
   "dsh": {
     "bundle": {
@@ -63,5 +64,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
