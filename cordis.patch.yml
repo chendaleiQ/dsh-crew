@@ -1,0 +1,35 @@
+# dsh-crew bundle patch.
+#
+# 一个包两半：
+# - 宿主半边（src/index.js，通过 package.json 的 dsh.bundle.patch 挂上来）：
+#   Bot 花名册的存储、派活、结果回收，向渲染侧 provide 一个 `dshCrew` 服务，
+#   并在宿主 web server 上挂 /crew/* 路由。
+# - 渲染半边（lib/client.js，通过 package.json 的 dsh.client 被发现）：
+#   侧边栏的 Crew 面板。
+#
+# loader 行的 id、package 名、src/index.js 里 `export const name` 三者必须一致。
+- insert:
+    - id: dsh-crew
+      name: '@chendaleiq/dsh-crew'
+      config:
+        enabled: true
+        # 空 = ~/.dsh/crew （Bot 花名册与运行状态都放这里，方便你自己翻）
+        dataDir: ''
+        # 派活后等一个 worker 跑完的最长时间
+        taskTimeoutMs: 900000
+        # 同时跑几个 Bot 的活（本机，别开太大）
+        maxConcurrent: 2
+        # 新 Bot 的默认工作目录前缀；空 = ~/Desktop/mine/projects
+        workspaceRoot: ''
+        # 空 = 跟随宿主当前的默认模型（agent-default-model）；单只 Bot 可在 bot.json 里覆盖
+        provider: ''
+        model: ''
+        # 跑通之后把真实路径录成 routine 草稿（下次同类任务直接注入系统提示）
+        recordRoutines: true
+        # 每轮花费估算（元）。0 = 不估——会话日志里没有逐轮 token 用量，别装作有账
+        costPerRoundCny: 0
+        # 记忆压缩：超了就归档旧条目（明细写进 memory.archive.md，不丢）。
+        # 注入预算只有 3000 字，超出阈值那部分反正读不到，所以别定太大。
+        memoryMaxEntries: 30
+        memoryMaxChars: 6000
+        memoryKeepRecent: 10

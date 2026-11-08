@@ -1,0 +1,67 @@
+{
+  "name": "@chendaleiq/dsh-crew",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "本机多 Bot 花名册：每个 Bot 有名字、人格、独立工作目录和记忆；一句话派活，结果进收件箱；给一个目标加机器可判定的验收，它一轮轮磨到通过为止。",
+  "license": "MIT",
+  "main": "src/index.js",
+  "bin": {
+    "crew": "./bin/crew.js"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./lib/client.js",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/**/*.js",
+    "bin/**/*.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "LICENSE",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  },
+  "author": "chendaleiQ",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "agent",
+    "bots",
+    "crew",
+    "roster",
+    "goals",
+    "local-first",
+    "macos"
+  ],
+  "scripts": {
+    "test": "node --test test/registry.test.mjs test/persona.test.mjs test/assign.test.mjs test/goal.test.mjs test/expedition.test.mjs test/inbox.test.mjs test/memory.test.mjs test/routine.test.mjs test/client.test.mjs test/package.test.mjs",
+    "smoke": "bash scripts/smoke.sh"
+  },
+  "icon": "./icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chendaleiQ/dsh-crew.git"
+  },
+  "homepage": "https://github.com/chendaleiQ/dsh-crew#readme",
+  "bugs": {
+    "url": "https://github.com/chendaleiQ/dsh-crew/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
