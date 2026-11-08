@@ -18,7 +18,7 @@ import { existsSync } from "node:fs"
 import { composeBrief, composeSystemPrompt } from "./persona.js"
 import { effectiveTools } from "./registry.js"
 import { buildRoutine } from "./routine.js"
-import { traceWorthRecording } from "./trace.js"
+import { traceShowsSuccess, traceWorthRecording } from "./trace.js"
 import { BotGoneError, addDeadEnd, checkAcceptance, decide, recordRound, rollDay } from "./goal.js"
 import { runTurn } from "./turn.js"
 
@@ -284,7 +284,12 @@ export class Expedition {
         costCny: this.config.costPerRoundCny || 0,
       })
       // 有实质进展的轮次值得记下来：它证明了"这条路走得通"。
-      if ((outcome === "progress" || after.ok) && this.config.recordRoutines !== false && traceWorthRecording(turn.trace)) {
+      if (
+        (outcome === "progress" || after.ok) &&
+        this.config.recordRoutines !== false &&
+        traceWorthRecording(turn.trace) &&
+        traceShowsSuccess(turn.trace)
+      ) {
         try {
           const routine = buildRoutine({
             task: `${goal.objective}（第 ${round} 轮）`,

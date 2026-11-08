@@ -13,21 +13,30 @@ import test from "node:test"
 
 import { BotRegistry } from "../src/registry.js"
 import { buildRoutine, parseRoutine, routineSlug, routineTitle } from "../src/routine.js"
-import { summariseTrace, traceWorthRecording } from "../src/trace.js"
+import { summariseTrace, traceShowsSuccess, traceWorthRecording } from "../src/trace.js"
 
-function call(name, args) {
-  return { type: "tool/call", data: { callId: `c-${name}`, name, arguments: JSON.stringify(args) } }
+/** 一次调用 + 一次成功结果，形状与真实会话一致（靠 toolCallId 配对）。 */
+function call(name, args, { ok = true, id } = {}) {
+  const callId = id ?? `c-${name}-${Math.random().toString(36).slice(2, 7)}`
+  return [
+    { type: "tool/call", data: { callId, name, arguments: JSON.stringify(args) } },
+    { type: "tool/result", data: { message: { toolCallId: callId, isError: !ok, content: [{ type: "text", text: ok ? "ok" : "Error: 被拦住" }] } } },
+  ]
+}
+/** 扁平化成一串事件。 */
+function events(...groups) {
+  return groups.flat()
 }
 
 test("轨迹：从真实形状里认出工具与目标", () => {
-  const events = [
-    call("bash", { command: "npm test" }),
-    call("read", { file_path: "/tmp/a.md" }),
-    call("edit", { file_path: "/tmp/a.md", old_string: "x", new_string: "y" }),
-    { type: "tool/result", data: { message: { content: [] } } },
-    call("web_search", { queries: ["甲", "乙"] }),
-  ]
-  const trace = summariseTrace(events)
+  const trace = summariseTrace(
+    events(
+      call("bash", { command: "npm test" }),
+      call("read", { file_path: "/tmp/a.md" }),
+      call("edit", { file_path: "/tmp/a.md", old_string: "x", new_string: "y" }),
+      call("web_search", { queries: ["甲", "乙"] }),
+    ),
+  )
   assert.deepEqual(trace.calls.map((item) => item.name), ["bash", "read", "edit", "web_search"])
   assert.equal(trace.calls[0].target, "npm test")
   assert.equal(trace.calls[3].target, "甲 / 乙")
@@ -37,13 +46,15 @@ test("轨迹：从真实形状里认出工具与目标", () => {
 })
 
 test("轨迹：连续重复的同一调用合并，中间夹了别的就各留一条", () => {
-  const trace = summariseTrace([
-    call("grep", { pattern: "TODO" }),
-    call("grep", { pattern: "TODO" }),
-    call("grep", { pattern: "TODO" }),
-    call("read", { file_path: "/tmp/b" }),
-    call("grep", { pattern: "TODO" }),
-  ])
+  const trace = summariseTrace(
+    events(
+      call("grep", { pattern: "TODO" }),
+      call("grep", { pattern: "TODO" }),
+      call("grep", { pattern: "TODO" }),
+      call("read", { file_path: "/tmp/b" }),
+      call("grep", { pattern: "TODO" }),
+    ),
+  )
   assert.deepEqual(trace.calls.map((item) => item.name), ["grep", "read", "grep"])
   assert.equal(trace.counts.grep, 2)
 })
@@ -55,9 +66,12 @@ test("轨迹：参数不是合法 JSON 也不炸，只是取不到目标", () =>
 })
 
 test("什么样的轨迹值得录：纯只读一两条不算，改了东西或步骤够多才算", () => {
-  assert.equal(traceWorthRecording(summariseTrace([call("read", { file_path: "/x" })])), false)
-  assert.equal(traceWorthRecording(summariseTrace([call("read", {}), call("glob", {}), call("grep", {})])), true)
-  assert.equal(traceWorthRecording(summariseTrace([call("write", { file_path: "/x" })])), true)
+  assert.equal(traceWorthRecording(summariseTrace(events(call("read", { file_path: "/x" })))), false)
+  assert.equal(
+    traceWorthRecording(summariseTrace(events(call("read", {}), call("glob", {}), call("grep", {})))),
+    true,
+  )
+  assert.equal(traceWorthRecording(summariseTrace(events(call("write", { file_path: "/x" })))), true)
   assert.equal(traceWorthRecording(null), false)
 })
 
@@ -69,7 +83,7 @@ test("slug 与标题：可读优先，汉字任务名退回短哈希", () => {
 })
 
 test("routine 草稿：标题、适用、通过验收的验收、步骤、结论、提示都在", () => {
-  const trace = summariseTrace([call("bash", { command: "npm test" }), call("write", { file_path: "/tmp/out.md" })])
+  const trace = summariseTrace(events(call("bash", { command: "npm test" }), call("write", { file_path: "/tmp/out.md" })))
   const routine = buildRoutine({
     task: "把首页改完",
     acceptance: [{ label: "文件存在：/tmp/out.md", ok: true }],
@@ -100,7 +114,7 @@ test("registry：routine 能存能列能读，坏文件不拖垮整张清单", a
   const registry = new BotRegistry(dir)
   try {
     await registry.save({ id: "w", name: "小文" })
-    const trace = summariseTrace([call("write", { file_path: "/tmp/x" })])
+    const trace = summariseTrace(events(call("write", { file_path: "/tmp/x" })))
     await registry.saveRoutine("w", buildRoutine({ task: "甲任务", result: "好的", trace }))
     await registry.saveRoutine("w", buildRoutine({ task: "Fix retry logic", result: "好了", trace }))
 
@@ -148,4 +162,29 @@ test("草稿清理只清最旧的草稿，confirmed 一条都不许动", async (
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test("被拦下的写不算跑通：touched 为空、failed 计数、不满足成功判据", () => {
+  const trace = summariseTrace(
+    events(call("write", { file_path: "/tmp/outside/x.md" }, { ok: false }), call("read", { file_path: "/tmp/outside/x.md" })),
+  )
+  assert.equal(trace.failed, 1)
+  assert.equal(trace.mutations, 0)
+  assert.deepEqual(trace.touched, [], "失败/被拦下的文件绝不能算「动过」")
+  assert.equal(traceShowsSuccess(trace), false, "这种轨迹录成 routine 就是教它重复越界")
+})
+
+test("成功判据：写成功一次即可；纯只读要三步全成功；有一步失败就不算", () => {
+  assert.equal(traceShowsSuccess(summariseTrace(events(call("write", { file_path: "/x" })))), true)
+  assert.equal(traceShowsSuccess(summariseTrace(events(call("read", {}), call("grep", {})))), false, "两步只读不够")
+  assert.equal(
+    traceShowsSuccess(summariseTrace(events(call("read", {}), call("grep", {}), call("glob", {})))),
+    true,
+    "三步只读全成功算跑通",
+  )
+  assert.equal(
+    traceShowsSuccess(summariseTrace(events(call("write", { file_path: "/x" }), call("read", {}, { ok: false })))),
+    false,
+    "中途有失败就不算",
+  )
 })

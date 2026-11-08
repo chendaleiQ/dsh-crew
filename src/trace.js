@@ -55,13 +55,29 @@ function parseArguments(raw) {
  * 连续重复的同一调用会被合并（模型经常同一个 grep 连打三次），
  * 但间隔出现的会各留一条——那是因为中间做了别的事，是有意义的顺序。
  *
- * @returns {{ calls: Array<{name: string, target: string}>, counts: object, files: string[], commands: string[], touched: string[] }}
+ * @returns {{ calls: Array<{name: string, target: string, ok: boolean|undefined}>, counts: object, files: string[], commands: string[], touched: string[], failed: number, mutations: number }}
  */
 export function summariseTrace(events = [], { limit = 60 } = {}) {
   const calls = []
   const counts = {}
   const files = []
   const commands = []
+
+  /**
+   * 先把每次调用的成败配对出来。
+   *
+   * 真实形状（从会话日志核过）：`tool/result` 的 `data.message.isError === true`，
+   * 用 `toolCallId` 和 `tool/call` 配对。**不配对就会把"被拦下的写入"记成
+   * "跑通的步骤"**——那正好是 routine 最不该学到的东西。
+   */
+  const verdict = new Map()
+  for (const event of events) {
+    if (event?.type !== "tool/result") continue
+    const message = event?.data?.message
+    const callId = message?.toolCallId ?? message?.source?.callId
+    if (typeof callId !== "string") continue
+    verdict.set(callId, message?.isError !== true)
+  }
 
   for (const event of events) {
     if (event?.type !== "tool/call") continue
@@ -70,10 +86,13 @@ export function summariseTrace(events = [], { limit = 60 } = {}) {
     const args = parseArguments(event?.data?.arguments)
     const target = targetOf(name, args)
 
+    const callId = event?.data?.callId
+    const ok = typeof callId === "string" ? verdict.get(callId) : undefined
+
     const previous = calls.at(-1)
     if (previous !== undefined && previous.name === name && previous.target === target) continue
 
-    calls.push({ name, target })
+    calls.push({ name, target, ok })
     counts[name] = (counts[name] ?? 0) + 1
     if (name === "bash" && target !== "") commands.push(target)
     else if (["read", "write", "edit"].includes(name) && target !== "") files.push(target)
@@ -84,16 +103,35 @@ export function summariseTrace(events = [], { limit = 60 } = {}) {
     counts,
     files: [...new Set(files)],
     commands: [...new Set(commands)],
-    /** 真正改动了东西的文件（写/改），不是只读过的。 */
+    /** 真正**写成功**的文件。失败或被拦下的写入不算——列进去等于骗自己。 */
     touched: [
       ...new Set(
         calls
-          .filter((call) => call.name === "write" || call.name === "edit")
+          .filter((call) => (call.name === "write" || call.name === "edit") && call.ok === true)
           .map((call) => call.target)
           .filter((target) => target !== ""),
       ),
     ],
+    /** 失败的调用数（含被守卫拦下的）。 */
+    failed: calls.filter((call) => call.ok === false).length,
+    /** 写成功的次数。 */
+    mutations: calls.filter((call) => (call.name === "write" || call.name === "edit") && call.ok === true).length,
   }
+}
+
+/**
+ * 这次执行算不算"跑通"。
+ *
+ * 判据不看模型说了什么，只看工具结果：一次失败都没有，且确实写成了东西
+ * （或者纯调研类任务至少三步全部成功）。被守卫拦下的那一轮会在这里被判否——
+ * 那正是我们要避免的"把失败录成套路"。
+ */
+export function traceShowsSuccess(trace) {
+  if (trace === undefined || trace === null) return false
+  if ((trace.failed ?? 0) > 0) return false
+  if ((trace.mutations ?? 0) > 0) return true
+  const calls = trace.calls ?? []
+  return calls.length >= 3 && calls.every((call) => call.ok === true)
 }
 
 /** 轨迹是否「有东西可记」：只有一两条只读调用不算一步流程。 */

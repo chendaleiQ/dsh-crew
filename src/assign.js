@@ -16,7 +16,7 @@ import { existsSync } from "node:fs"
 import { composeBrief, composeSystemPrompt } from "./persona.js"
 import { effectiveTools } from "./registry.js"
 import { buildRoutine } from "./routine.js"
-import { traceWorthRecording } from "./trace.js"
+import { traceShowsSuccess, traceWorthRecording } from "./trace.js"
 import { runTurn } from "./turn.js"
 
 /** 单次任务的字符上限：粘贴一整个文件进来说"改一下"是最常见的误用。 */
@@ -164,7 +164,13 @@ export class CrewAssigner {
     })
 
     // 跑通了就把它固化成 routine：下次同类任务直接在系统提示里看到这条路径。
-    if (turn.state === "done" && turn.result !== "" && this.config.recordRoutines !== false && traceWorthRecording(turn.trace)) {
+    if (
+      turn.state === "done" &&
+      turn.result !== "" &&
+      this.config.recordRoutines !== false &&
+      traceWorthRecording(turn.trace) &&
+      traceShowsSuccess(turn.trace)
+    ) {
       try {
         const routine = buildRoutine({ task, result: turn.result, trace: turn.trace, botName: bot.name })
         await this.registry.saveRoutine(bot.id, routine)

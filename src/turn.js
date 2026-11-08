@@ -20,6 +20,25 @@ import { summariseTrace } from "./trace.js"
  */
 const INTERNAL_TOOLS = ["working_directory", "todo_write"]
 
+/**
+ * 取一次工具调用的参数。
+ *
+ * 宿主契约（从 dsh 的 ToolExecutionInput 核过）里字段叫 `arguments`，
+ * 不是 `args`——按 `args` 读永远拿不到路径，写守卫就会一律判「没有给路径」。
+ * 另外 `arguments` 在某些路径上是 JSON 字符串，所以两种都认。
+ */
+function argsOf(exec) {
+  const raw = exec?.arguments ?? exec?.args
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw === "object") return raw
+  try {
+    const parsed = JSON.parse(String(raw))
+    return parsed !== null && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
 /** 把 unknown 压成一句人话，避免状态里出现 [object Object]。 */
 function errText(error) {
   return error instanceof Error ? error.message : String(error)
@@ -220,12 +239,11 @@ export async function runTurn({
                  * 一次调用里的第一个动作往往只带路径、不落到工具名上，所以除了名字
                  * 还要看它在碰哪——否则「改名就绕过」和「写到 crew 数据目录」都拦不住。
                  */
-                if (WRITE_TOOLS.has(name) || name === "bash") {
-                  const target = exec?.args?.file_path ?? exec?.args?.path
-                  if (WRITE_TOOLS.has(name)) {
-                    const verdict = checkWriteTarget({ target, cwd: writeRoot })
-                    if (!verdict.ok) return `Crew：${verdict.reason}`
-                  }
+                if (WRITE_TOOLS.has(name)) {
+                  const args = argsOf(exec)
+                  const target = args.file_path ?? args.path ?? args.target ?? args.file
+                  const verdict = checkWriteTarget({ target, cwd: writeRoot })
+                  if (!verdict.ok) return `Crew：${verdict.reason}`
                 }
                 return undefined
               })

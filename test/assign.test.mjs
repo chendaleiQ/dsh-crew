@@ -325,8 +325,14 @@ test("跑通后录成 routine，下一次派活的系统提示里就能看到它
             async followup() {
               agent.status = "running"
               // 模拟真实的轨迹形状
-              events.push({ type: "tool/call", data: { name: "bash", arguments: JSON.stringify({ command: "npm test" }) } })
-              events.push({ type: "tool/call", data: { name: "write", arguments: JSON.stringify({ file_path: "/tmp/out.md" }) } })
+              for (const [name, args] of [
+                ["bash", { command: "npm test" }],
+                ["write", { file_path: "/tmp/out.md" }],
+              ]) {
+                const callId = `c-${name}`
+                events.push({ type: "tool/call", data: { callId, name, arguments: JSON.stringify(args) } })
+                events.push({ type: "tool/result", data: { message: { toolCallId: callId, isError: false, content: [] } } })
+              }
               events.push({ type: "assistant/message", data: { message: { content: [{ type: "text", text: "改好了，测试通过" }] } } })
               agent.status = "idle"
             },
@@ -367,7 +373,8 @@ test("关掉 recordRoutines 就不录", async () => {
         session: { snapshotEvents: () => events },
         async followup() {
           agent.status = "running"
-          events.push({ type: "tool/call", data: { name: "write", arguments: JSON.stringify({ file_path: "/tmp/a" }) } })
+          events.push({ type: "tool/call", data: { callId: "c-w", name: "write", arguments: JSON.stringify({ file_path: "/tmp/a" }) } })
+          events.push({ type: "tool/result", data: { message: { toolCallId: "c-w", isError: false, content: [] } } })
           events.push({ type: "assistant/message", data: { message: { content: [{ type: "text", text: "好了" }] } } })
           agent.status = "idle"
         },
@@ -468,17 +475,17 @@ test("guard 还管路径：写到自己目录外、或改 crew 数据目录，�
     await (await assigner.start({ botId: "writer", task: "写点东西" })).done
 
     const guard = guards[0]
-    assert.equal(guard({ name: "write", args: { file_path: `${dir}/note.md` } }), undefined, "自己目录内放行")
-    assert.match(String(guard({ name: "write", args: { file_path: "/tmp/evil.sh" } })), /工作目录/)
-    assert.match(String(guard({ name: "edit", args: { file_path: "../../etc/passwd" } })), /工作目录/)
+    assert.equal(guard({ name: "write", arguments: { file_path: `${dir}/note.md` } }), undefined, "自己目录内放行")
+    assert.match(String(guard({ name: "write", arguments: { file_path: "/tmp/evil.sh" } })), /工作目录/)
+    assert.match(String(guard({ name: "edit", arguments: { file_path: "../../etc/passwd" } })), /工作目录/)
     const { crewDataDir } = await import("../src/paths.js")
     assert.match(
-      String(guard({ name: "write", args: { file_path: `${crewDataDir()}/bots/writer/goal.json` } })),
+      String(guard({ name: "write", arguments: { file_path: `${crewDataDir()}/bots/writer/goal.json` } })),
       /数据目录|工作目录/,
       "改自己的 goal.json 就等于给宿主塞命令，必须拦",
     )
     // 读不受影响：读文档是正常需求
-    assert.equal(guard({ name: "read", args: { file_path: "/etc/hosts" } }), undefined)
+    assert.equal(guard({ name: "read", arguments: { file_path: "/etc/hosts" } }), undefined)
   })
 })
 
@@ -500,5 +507,56 @@ test("任务超长直接拒：让人把内容写进文件，任务只说目标",
     // 刚好在阈值上不被拒
     const ok = await assigner.start({ botId: "writer", task: "啊".repeat(MAX_TASK_CHARS) })
     await ok.done
+  })
+})
+
+test("guard 也认 JSON 字符串形式的 arguments（宿主两种都可能给）", async () => {
+  await withCrew(async ({ registry, dir }) => {
+    const { ctx, guards } = makeCtx()
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, pollMs: 5 })
+    await (await assigner.start({ botId: "writer", task: "写点东西" })).done
+    const guard = guards[0]
+    assert.equal(guard({ name: "write", arguments: JSON.stringify({ file_path: `${dir}/ok.md` }) }), undefined)
+    assert.match(String(guard({ name: "write", arguments: JSON.stringify({ file_path: "/tmp/no.md" }) })), /工作目录/)
+    assert.match(String(guard({ name: "write", arguments: "{坏 JSON" })), /没有给路径/, "解析不了就别放行")
+  })
+})
+
+test("一整轮都没写成（被守卫拦住）：不许录成 routine——那等于教它重复越界", async () => {
+  await withCrew(async ({ registry }) => {
+    const events = []
+    const ctx = {
+      agents: {
+        async create(options) {
+          options.setup?.({
+            systemPrompt: { section: () => {} },
+            tools: { restrict: () => {}, guard: () => {} },
+          })
+          const agent = {
+            status: "idle",
+            session: { snapshotEvents: () => events },
+            async followup() {
+              agent.status = "running"
+              for (const target of ["/tmp/outside/x.md", "~/.dsh/crew/bots/writer/goal.json"]) {
+                const callId = `c-${target.length}`
+                events.push({ type: "tool/call", data: { callId, name: "write", arguments: JSON.stringify({ file_path: target }) } })
+                events.push({
+                  type: "tool/result",
+                  data: { message: { toolCallId: callId, isError: true, content: [{ type: "text", text: "Error: Crew：只能在自己的工作目录里写" }] } },
+                })
+              }
+              events.push({ type: "assistant/message", data: { message: { content: [{ type: "text", text: "两处都被拦住，都没写成" }] } } })
+              agent.status = "idle"
+            },
+            async cancel() {},
+            async dispose() {},
+          }
+          return { agent, dispose: () => agent.dispose() }
+        },
+      },
+    }
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, pollMs: 5 })
+    await (await assigner.start({ botId: "writer", task: "往目录外写东西" })).done
+    assert.deepEqual(await registry.listRoutines("writer"), [], "失败的轨迹不该变成套路")
   })
 })
