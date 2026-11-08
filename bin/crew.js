@@ -39,7 +39,7 @@ async function main(argv) {
   if (command === undefined || command === "-h" || command === "--help") {
     console.log(`用法：
   crew list
-  crew add <id> --name <名字> [--role <角色>] [--persona <人格>] [--cwd <目录>] [--bash]
+  crew add <id> --name <名字> [--role <角色>] [--persona <人格>] [--cwd <目录>] [--bash] [--force]
   crew show <id>
   crew memory <id> [--append <文本>]
   crew rm <id>
@@ -75,6 +75,7 @@ async function main(argv) {
         persona: { type: "string" },
         cwd: { type: "string" },
         bash: { type: "boolean", default: false },
+        force: { type: "boolean", default: false },
       },
       strict: false,
     })
@@ -83,6 +84,18 @@ async function main(argv) {
       existing = await registry.read(id)
     } catch {
       existing = undefined
+    }
+    /**
+     * 只写了 id、什么都没改 → 认为你手滑了，报清楚现状再退出。
+     * 带了任何字段就是一次有意的更新（保存是合并语义，不会清空没提到的字段）。
+     */
+    const touched = ["name", "role", "persona", "cwd"].some((key) => values[key] !== undefined) || values.bash === true
+    if (existing !== undefined && !touched && values.force !== true) {
+      console.log(`「${existing.id}」已经存在：${existing.name}${existing.role === "" ? "" : ` — ${existing.role}`}`)
+      console.log(`  人格：${(existing.persona || "（空）").slice(0, 60)}`)
+      console.log(`  目录：${existing.cwd || "（未设）"}`)
+      console.log("要改就带上要改的字段（例如 --persona \"...\"）；要整体重置加 --force。")
+      return 1
     }
     const bot = await registry.save({
       ...(existing ?? {}),
@@ -146,7 +159,8 @@ async function main(argv) {
     const goal = await goals.read(id)
     console.log(`目标：${goal.objective}`)
     console.log(`状态：${goal.status}${goal.note === "" ? "" : `（${goal.note}）`}`)
-    console.log(`轮次：${goal.rounds.length} 轮 · 死路 ${goal.deadEnds.length} 条 · 今日花费 ${goal.budget.spentCny === 0 ? "未接" : `约 ¥${goal.budget.spentCny.toFixed(2)}`}`)
+    const trimmed = goal.roundsTrimmed > 0 ? `（另有 ${goal.roundsTrimmed} 轮已折叠）` : ""
+    console.log(`轮次：${goal.rounds.length} 轮${trimmed} · 死路 ${goal.deadEnds.length} 条 · 今日花费 ${goal.budget.spentCny === 0 ? "未接" : `约 ¥${goal.budget.spentCny.toFixed(2)}`}`)
     if (goal.acceptance.length > 0) {
       console.log("验收：")
       for (const check of goal.acceptance) console.log(`  - [${check.kind}] ${check.label}`)

@@ -11,12 +11,16 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 
 import { composeBrief, composeSystemPrompt } from "./persona.js"
 import { effectiveTools } from "./registry.js"
 import { buildRoutine } from "./routine.js"
 import { traceWorthRecording } from "./trace.js"
 import { runTurn } from "./turn.js"
+
+/** 单次任务的字符上限：粘贴一整个文件进来说"改一下"是最常见的误用。 */
+export const MAX_TASK_CHARS = 8_000
 
 export class CrewAssigner {
   /**
@@ -82,9 +86,17 @@ export class CrewAssigner {
 
   async #startWithSlot({ botId, task, extra, onProgress, taskId, release }) {
 
+    const want = String(task ?? "").trim()
+    if (want === "") throw new Error("需要一句具体任务")
+    if (want.length > MAX_TASK_CHARS) {
+      throw new Error(`任务太长（${want.length} 字 > ${MAX_TASK_CHARS}），把要改的东西写进文件、任务只说目标`)
+    }
+
     const bot = await this.registry.read(botId)
     if (bot.fault) throw new Error(`这个 Bot 的档案是坏的：${bot.faultReason}`)
     if (bot.cwd === "") throw new Error("这个 Bot 没有工作目录，先在档案里给它一个 cwd")
+    // 目录不存在时，宿主建会话会以一个很难读懂的错误失败；这里提前说人话。
+    if (!existsSync(bot.cwd)) throw new Error(`工作目录不存在：${bot.cwd}`)
 
     // 派活也会往记忆里追加结论；不压的话跑几十次同样会把记忆撑爆。
     try {

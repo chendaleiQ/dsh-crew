@@ -12,7 +12,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 
-import { CrewAssigner } from "../src/assign.js"
+import { CrewAssigner, MAX_TASK_CHARS } from "../src/assign.js"
 import { Expedition } from "../src/expedition.js"
 import { Gate } from "../src/gate.js"
 import { GoalStore } from "../src/goal.js"
@@ -479,5 +479,26 @@ test("guard 还管路径：写到自己目录外、或改 crew 数据目录，�
     )
     // 读不受影响：读文档是正常需求
     assert.equal(guard({ name: "read", args: { file_path: "/etc/hosts" } }), undefined)
+  })
+})
+
+test("工作目录不存在时提前说人话，而不是等宿主抛一个看不懂的错", async () => {
+  await withCrew(async ({ registry }) => {
+    await registry.save({ id: "ghost", name: "幽灵", cwd: "/tmp/crew-not-there-at-all" })
+    const { ctx } = makeCtx()
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, pollMs: 5 })
+    await assert.rejects(() => assigner.start({ botId: "ghost", task: "干点活" }), /工作目录不存在/)
+  })
+})
+
+test("任务超长直接拒：让人把内容写进文件，任务只说目标", async () => {
+  await withCrew(async ({ registry }) => {
+    const { ctx } = makeCtx()
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, pollMs: 5 })
+    const huge = "啊".repeat(MAX_TASK_CHARS + 1)
+    await assert.rejects(() => assigner.start({ botId: "writer", task: huge }), /任务太长/)
+    // 刚好在阈值上不被拒
+    const ok = await assigner.start({ botId: "writer", task: "啊".repeat(MAX_TASK_CHARS) })
+    await ok.done
   })
 })

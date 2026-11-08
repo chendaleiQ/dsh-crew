@@ -13,6 +13,7 @@
  */
 
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 
 import { composeBrief, composeSystemPrompt } from "./persona.js"
 import { effectiveTools } from "./registry.js"
@@ -149,6 +150,7 @@ export class Expedition {
 
     const bot = await this.registry.read(botId)
     if (bot.cwd === "") throw new Error("这个 Bot 没有工作目录，目标无处落地")
+    if (!existsSync(bot.cwd)) throw new Error(`工作目录不存在：${bot.cwd}`)
     if (!(await this.goals.exists(botId))) throw new Error("这个 Bot 还没有目标，先给它一个")
 
     const goal = rollDay(await this.goals.read(botId))
