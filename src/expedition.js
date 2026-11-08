@@ -240,6 +240,7 @@ export class Expedition {
         text: brief,
         systemText: system.text,
         allowTools: effectiveTools(bot),
+        writeRoot: bot.cwd,
         title: `${bot.name} · 第${round}轮`,
         timeoutMs: this.config.taskTimeoutMs,
         pollMs: this.pollMs,

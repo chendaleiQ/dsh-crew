@@ -134,6 +134,7 @@ export class CrewAssigner {
       text: brief,
       systemText: system.text,
       allowTools: effectiveTools(bot),
+      writeRoot: bot.cwd,
       title: `${bot.name} · ${String(task ?? "").replace(/\s+/gu, " ").trim().slice(0, 24)}`,
       timeoutMs: this.config.taskTimeoutMs,
       pollMs: this.pollMs,

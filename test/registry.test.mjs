@@ -115,3 +115,24 @@ test("删档之后写记忆不会把 Bot 复活（只留个 memory.md 的空壳�
     assert.match(compacted.summary, /已删除/)
   })
 })
+
+test("部分更新是合并：只改名字不会把人格和目录冲掉", async () => {
+  await withRegistry(async (registry) => {
+    await registry.save({ id: "w", name: "小文", role: "写作", persona: "你写短句。", cwd: "/tmp/work", tools: ["read"] })
+    const updated = await registry.save({ id: "w", name: "小文2" })
+    assert.equal(updated.name, "小文2")
+    assert.equal(updated.persona, "你写短句。", "人格不能被默认值冲掉")
+    assert.equal(updated.cwd, "/tmp/work", "工作目录不能丢")
+    assert.deepEqual(updated.tools, ["read"])
+    assert.equal(updated.role, "写作")
+  })
+})
+
+test("显式传空字符串才算清空（合并语义不能把「清空」也吃掉）", async () => {
+  await withRegistry(async (registry) => {
+    await registry.save({ id: "w", name: "小文", persona: "旧人格" })
+    const cleared = await registry.save({ id: "w", persona: "" })
+    assert.equal(cleared.persona, "")
+    assert.equal(cleared.name, "小文")
+  })
+})

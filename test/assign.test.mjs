@@ -460,3 +460,24 @@ test("派活跑之前会压一次记忆：否则几十次派活同样能把 memo
     assert.match(await readFile(registry.archiveFile("writer"), "utf8"), /结论 0/, "老明细进归档")
   })
 })
+
+test("guard 还管路径：写到自己目录外、或改 crew 数据目录，都被拦", async () => {
+  await withCrew(async ({ registry, dir }) => {
+    const { ctx, guards } = makeCtx()
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, pollMs: 5 })
+    await (await assigner.start({ botId: "writer", task: "写点东西" })).done
+
+    const guard = guards[0]
+    assert.equal(guard({ name: "write", args: { file_path: `${dir}/note.md` } }), undefined, "自己目录内放行")
+    assert.match(String(guard({ name: "write", args: { file_path: "/tmp/evil.sh" } })), /工作目录/)
+    assert.match(String(guard({ name: "edit", args: { file_path: "../../etc/passwd" } })), /工作目录/)
+    const { crewDataDir } = await import("../src/paths.js")
+    assert.match(
+      String(guard({ name: "write", args: { file_path: `${crewDataDir()}/bots/writer/goal.json` } })),
+      /数据目录|工作目录/,
+      "改自己的 goal.json 就等于给宿主塞命令，必须拦",
+    )
+    // 读不受影响：读文档是正常需求
+    assert.equal(guard({ name: "read", args: { file_path: "/etc/hosts" } }), undefined)
+  })
+})

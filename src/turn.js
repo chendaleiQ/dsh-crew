@@ -11,6 +11,7 @@
 
 import { randomUUID } from "node:crypto"
 
+import { WRITE_TOOLS, checkWriteTarget } from "./paths.js"
 import { summariseTrace } from "./trace.js"
 
 /**
@@ -108,6 +109,7 @@ export function describeEmptyTurn(agent, sinceIndex = 0) {
  * @param {() => boolean} [input.shouldCancel]
  * @param {string} [input.systemText]   写进 system prompt 的身份与边界
  * @param {string[]} [input.allowTools] 工具白名单；空数组 = 不限制
+ * @param {string} [input.writeRoot]   允许写文件的范围（通常是 Bot 的 cwd）
  * @param {(line: string) => void} [input.log]
  */
 export async function runTurn({
@@ -123,6 +125,7 @@ export async function runTurn({
   shouldCancel = () => false,
   systemText = "",
   allowTools = [],
+  writeRoot = "",
   log = () => {},
 }) {
   const startedAt = new Date().toISOString()
@@ -188,7 +191,19 @@ export async function runTurn({
             try {
               agentCtx.tools.guard((exec) => {
                 const name = String(exec?.name ?? "")
-                return guardAllowed.has(name) ? undefined : `Crew：工具 ${name} 不在这个 Bot 的白名单里`
+                if (!guardAllowed.has(name)) return `Crew：工具 ${name} 不在这个 Bot 的白名单里`
+                /**
+                 * 一次调用里的第一个动作往往只带路径、不落到工具名上，所以除了名字
+                 * 还要看它在碰哪——否则「改名就绕过」和「写到 crew 数据目录」都拦不住。
+                 */
+                if (WRITE_TOOLS.has(name) || name === "bash") {
+                  const target = exec?.args?.file_path ?? exec?.args?.path
+                  if (WRITE_TOOLS.has(name)) {
+                    const verdict = checkWriteTarget({ target, cwd: writeRoot })
+                    if (!verdict.ok) return `Crew：${verdict.reason}`
+                  }
+                }
+                return undefined
               })
               toolPolicy.guard = "applied"
             } catch (error) {

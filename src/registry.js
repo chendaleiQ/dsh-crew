@@ -95,6 +95,15 @@ export function effectiveTools(bot) {
   return [...tools]
 }
 
+/** 丢掉 undefined 字段：合并时「没传」不等于「改成空」。 */
+function stripUndefined(raw) {
+  const out = {}
+  for (const [key, value] of Object.entries(raw ?? {})) {
+    if (value !== undefined) out[key] = value
+  }
+  return out
+}
+
 /** 序列化回磁盘时的字段顺序，diff 友好。 */
 function toDisk(bot) {
   return {
@@ -180,9 +189,21 @@ export class BotRegistry {
     return normalizeBot(raw, { id })
   }
 
-  /** 新建或更新。新建时会一并建目录、写一份空的 memory.md。 */
+  /**
+   * 新建或更新。新建时会一并建目录、写一份空的 memory.md。
+   *
+   * 更新是**合并**语义：只传要改的字段就行。之前的写法会用一个只有 id 的入参
+   * 把人格、目录、工具白名单全冲成默认值——一次手滑就丢设定。
+   */
   async save(input) {
-    const bot = normalizeBot({ ...input, updatedAt: new Date().toISOString() })
+    let existing = null
+    try {
+      existing = await this.read(input?.id)
+    } catch {
+      existing = null
+    }
+    const merged = existing === null ? { ...input } : { ...toDisk(existing), ...stripUndefined(input) }
+    const bot = normalizeBot({ ...merged, updatedAt: new Date().toISOString() })
     await mkdir(this.botDir(bot.id), { recursive: true })
     await writeJsonAtomic(this.botFile(bot.id), toDisk(bot))
     try {
