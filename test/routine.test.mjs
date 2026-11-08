@@ -119,3 +119,33 @@ test("registry：routine 能存能列能读，坏文件不拖垮整张清单", a
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test("草稿清理只清最旧的草稿，confirmed 一条都不许动", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "crew-prune-"))
+  const registry = new BotRegistry(dir)
+  const trace = summariseTrace([call("write", { file_path: "/tmp/x" })])
+  try {
+    await registry.save({ id: "w", name: "小文" })
+    // 两条确认过的（手工写成 confirmed）
+    for (const name of ["确认甲", "确认乙"]) {
+      const routine = buildRoutine({ task: name, result: "ok", trace })
+      await registry.saveRoutine("w", { ...routine, text: routine.text.replace("status: draft", "status: confirmed") })
+    }
+    // 45 条草稿，间隔写入保证 mtime 有序
+    for (let index = 0; index < 45; index += 1) {
+      const routine = buildRoutine({ task: `草稿 ${index}`, result: "ok", trace })
+      await registry.saveRoutine("w", routine)
+      await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+    const list = await registry.listRoutines("w")
+    const confirmed = list.filter((item) => item.status === "confirmed")
+    const drafts = list.filter((item) => item.status === "draft")
+    assert.equal(confirmed.length, 2, "确认过的必须全在")
+    assert.ok(drafts.length <= 40, `草稿要清到 40 以内，实际 ${drafts.length}`)
+    // 被删的是最旧的草稿，最新的还在
+    assert.ok(drafts.some((item) => item.title === "草稿 44"), "最新的草稿不能被清掉")
+    assert.ok(!drafts.some((item) => item.title === "草稿 0"), "最旧的草稿应该被清掉")
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

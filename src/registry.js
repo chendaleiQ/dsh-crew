@@ -16,7 +16,7 @@
  * - bot.json 里只存「稳定事实」，运行态一律进 state.json，避免两个写者抢同一个文件。
  */
 
-import { appendFile, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, readFile, readdir, rename, rm, stat as statFile, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
 
@@ -274,7 +274,37 @@ export class BotRegistry {
     const dir = this.routinesDir(id)
     await mkdir(dir, { recursive: true })
     await writeFile(this.routineFile(id, routine.slug), routine.text, "utf8")
+    await this.#pruneRoutines(id).catch(() => {})
     return routine
+  }
+
+  /**
+   * 草稿太多就按最旧的清掉，但**永不动 confirmed**。
+   *
+   * 自动录的草稿是"可能有用"，你确认过的才是"确实有用"；把后者清掉等于失忆。
+   * 上限只约束草稿，所以长跑不会无限堆文件，也不会把你认可的东西弄丢。
+   */
+  async #pruneRoutines(id, maxDrafts = 40) {
+    const dir = this.routinesDir(id)
+    const { parseRoutine } = await import("./routine.js")
+    const entries = await readdir(dir).catch(() => [])
+    const drafts = []
+    for (const entry of entries) {
+      if (!entry.endsWith(".md")) continue
+      const file = join(dir, entry)
+      try {
+        const [text, stat] = await Promise.all([readFile(file, "utf8"), statFile(file)])
+        if (parseRoutine(entry.replace(/\.md$/u, ""), text).status === "confirmed") continue
+        drafts.push({ file, at: stat.mtimeMs })
+      } catch {
+        /* 读不到就跳过，不在清理路径上抛错 */
+      }
+    }
+    if (drafts.length <= maxDrafts) return 0
+    drafts.sort((left, right) => left.at - right.at)
+    const doomed = drafts.slice(0, drafts.length - maxDrafts)
+    for (const item of doomed) await rm(item.file, { force: true }).catch(() => {})
+    return doomed.length
   }
 
   /** 列出 routine 摘要（按文件名排序，稳定）。 */

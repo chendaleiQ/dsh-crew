@@ -22,6 +22,15 @@ export const GOAL_FILE = "goal.json"
 /** 连续这么多轮没有实质进展就停：再跑也只是烧钱。 */
 export const MAX_NO_PROGRESS = 3
 
+/**
+ * 目标里最多保留多少轮明细。
+ *
+ * 跑上百轮之后 rounds 会变成一份比目标本身还长的流水账：读一次几万字符，
+ * 而 decide() 只关心最近几轮。所以只留最近 N 轮，更早的折成一条计数说明——
+ * 折叠不是删除事实，是让它别再占据每一轮的读盘与注入体积。
+ */
+export const MAX_ROUNDS_KEPT = 200
+
 export const GOAL_STATUS = ["active", "done", "stopped", "blocked", "needs-human"]
 
 /** 一条验收：file（文件存在）/ command（命令成功）/ manual（只能人看）。 */
@@ -97,6 +106,7 @@ export function normalizeGoal(raw, { botId } = {}) {
     constraints: Array.isArray(raw.constraints) ? raw.constraints.map((item) => String(item).trim()).filter(Boolean) : [],
     status: GOAL_STATUS.includes(raw.status) ? raw.status : "active",
     rounds,
+    roundsTrimmed: Number.isFinite(raw.roundsTrimmed) && raw.roundsTrimmed > 0 ? Math.trunc(raw.roundsTrimmed) : 0,
     deadEnds: Array.isArray(raw.deadEnds) ? raw.deadEnds.filter((item) => typeof item === "string" && item.trim() !== "") : [],
     budget: {
       capCny: Number(raw.budget?.capCny) > 0 ? Number(raw.budget.capCny) : base.budget.capCny,
@@ -209,13 +219,19 @@ export async function checkAcceptance(goal, { cwd = "", manualApproved = [] } = 
   }
 }
 
-/** 追加一轮记账，并把「支出」并进当日预算。 */
+/** 追一轮记账，并把「支出」并进当日预算；超过上限时折叠最老的明细。 */
 export function recordRound(goal, round) {
-  const rounds = [...goal.rounds, { n: goal.rounds.length + 1, ...round }]
+  // 轮次编号必须全局单调：被折叠掉的老轮次也要算进来，否则折叠之后编号会撞回 201、202…
+  // 编号一旦不单调，日志里「第几轮」就对不上，复盘时全是错位。
+  const previousTotal = (goal.roundsTrimmed ?? 0) + goal.rounds.length
+  const rounds = [...goal.rounds, { n: previousTotal + 1, ...round }]
   const cost = Number(round.costCny) > 0 ? Number(round.costCny) : 0
+  const kept = rounds.length > MAX_ROUNDS_KEPT ? rounds.slice(rounds.length - MAX_ROUNDS_KEPT) : rounds
+  const trimmed = (goal.roundsTrimmed ?? 0) + (rounds.length - kept.length)
   return rollDay({
     ...goal,
-    rounds,
+    rounds: kept,
+    roundsTrimmed: trimmed,
     budget: { ...goal.budget, spentCny: goal.budget.spentCny + cost },
     updatedAt: new Date().toISOString(),
   })

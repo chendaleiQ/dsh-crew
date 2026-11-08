@@ -154,21 +154,32 @@ async function loadClient(options = {}) {
   let factory = null
 
   const fakeReact = makeReact()
+  // window 指向沙箱本身，和浏览器里 window === globalThis 一致：
+  // 面板里既用 window.setInterval，也用全局 document，两者不能各说各话。
   const sandbox = {
-    window: {},
     console: { info: () => {}, error: () => {}, warn: () => {} },
-    fetch: options.fetch ?? (async () => ({ ok: true, json: async () => ({}) })),
-    setInterval: () => 0,
+    fetch: async (...args) => {
+      sandbox.__requests.push(args[0])
+      return (options.fetch ?? (async () => ({ ok: true, json: async () => ({}) })))(...args)
+    },
+    __requests: [],
+    setInterval: (fn) => {
+      sandbox.__intervals = sandbox.__intervals ?? []
+      sandbox.__intervals.push(fn)
+      return 0
+    },
     clearInterval: () => {},
     setTimeout: () => 0,
     clearTimeout: () => {},
   }
+  sandbox.window = sandbox
   sandbox.window.__ModuleLoader__ = {
     load({ id, factory: fn }) {
       loadedId = id
       factory = fn
     },
   }
+  if (options.document !== undefined) sandbox.document = options.document
   sandbox.globalThis = sandbox
   vm.createContext(sandbox)
   vm.runInContext(source, sandbox, { filename: "client.js" })
@@ -194,7 +205,7 @@ async function loadClient(options = {}) {
   }
   module.apply(ctx)
 
-  return { loadedId, module, registrations, injections, react: fakeReact }
+  return { loadedId, module, registrations, injections, react: fakeReact, sandbox }
 }
 
 test("模块 id 与包名一致，factory 返回 { name, inject, apply }", async () => {
@@ -381,4 +392,20 @@ test("交互：有目标的 Bot 显示轮次/套路/磨目标入口，收件箱�
   assert.match(text, /1 件等你处理/)
   assert.match(text, /小文：目标等你介入/)
   assert.doesNotMatch(text, /还没有目标/)
+})
+
+test("面板不可见时不轮询；切回来立刻补一次", async () => {
+  const loaded = await loadClient({
+    document: { visibilityState: "hidden", addEventListener: () => {}, removeEventListener: () => {} },
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, bots: [], state: { bots: {} }, goals: {}, inbox: [], inboxSummary: "" }) }),
+  })
+  const main = loaded.registrations.find((item) => item.spec.name === "main")
+  loaded.react.begin(main.component)
+  main.component({})
+  const before = loaded.sandbox.__requests?.length ?? 0
+  const interval = (loaded.sandbox.__intervals ?? []).at(-1)
+  assert.equal(typeof interval, "function", "应该注册了轮询")
+  interval()
+  await new Promise((resolve) => setTimeout(resolve, 10))
+  assert.equal(loaded.sandbox.__requests?.length ?? 0, before, "隐藏状态下轮询不该发请求")
 })

@@ -435,3 +435,28 @@ test("校验失败要把额度还回去（否则一次失败就永久少一个�
     await ok.done
   })
 })
+
+test("派活跑之前会压一次记忆：否则几十次派活同样能把 memory 撑爆", async () => {
+  await withCrew(async ({ registry }) => {
+    const { writeFile } = await import("node:fs/promises")
+    // 塞一份超阈值的记忆（默认 30 条 / 6000 字）
+    const entries = []
+    for (let index = 0; index < 40; index += 1) {
+      entries.push(`## 2026-11-0${(index % 9) + 1} 1${index % 10}:00`)
+      entries.push(`做完「第 ${index} 件事」，结论：结论 ${index}`)
+      entries.push("细节：这一步试了三种办法，最后走通第三种。")
+      entries.push("")
+    }
+    await writeFile(registry.memoryFile("writer"), `# 小文 的记忆\n\n${entries.join("\n")}`, "utf8")
+
+    const { ctx } = makeCtx()
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, pollMs: 5 })
+    await (await assigner.start({ botId: "writer", task: "写一句" })).done
+
+    const memory = await registry.readMemory("writer")
+    assert.match(memory, /早期摘要/, "派活路径也要压缩记忆")
+    assert.match(memory, /结论 39/, "最近的结论必须还在")
+    const { readFile } = await import("node:fs/promises")
+    assert.match(await readFile(registry.archiveFile("writer"), "utf8"), /结论 0/, "老明细进归档")
+  })
+})

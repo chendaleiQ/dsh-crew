@@ -11,6 +11,7 @@ import test from "node:test"
 
 import {
   GOAL_LIMITS,
+  MAX_ROUNDS_KEPT,
   GoalStore,
   addDeadEnd,
   checkAcceptance,
@@ -185,4 +186,32 @@ test("验收条件缺字段的条目被丢掉，而不是变成一定会过的�
   })
   assert.equal(goal.acceptance.length, 1)
   assert.equal(goal.acceptance[0].kind, "manual")
+})
+
+test("轮次历史有上限：跑到几百轮也不会把 goal.json 撑成日志，折叠量单独记", () => {
+  let goal = goalWith()
+  for (let index = 0; index < MAX_ROUNDS_KEPT + 30; index += 1) {
+    goal = recordRound(goal, { outcome: "no-progress", costCny: 0 })
+  }
+  assert.equal(goal.rounds.length, MAX_ROUNDS_KEPT)
+  assert.equal(goal.roundsTrimmed, 30, "折叠的轮次要单独记数，不能悄悄丢掉")
+  // 最近一轮的编号仍然连续，decide() 才会算对「连续几轮没进展」
+  assert.equal(goal.rounds.at(-1).n, MAX_ROUNDS_KEPT + 30)
+  assert.equal(consecutiveNoProgress(goal), MAX_ROUNDS_KEPT, "保留的最近轮次都算得出来")
+})
+
+test("折叠量能落盘再读回来（不许读一次就归零）", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "crew-rounds-"))
+  const registry = new BotRegistry(dir)
+  const store = new GoalStore(registry)
+  try {
+    await registry.save({ id: "w", name: "小文", cwd: dir })
+    let goal = await store.create({ botId: "w", objective: "磨", acceptance: [{ kind: "manual", hint: "看" }] })
+    goal = { ...goal, roundsTrimmed: 7 }
+    await store.save(goal)
+    const back = await store.read("w")
+    assert.equal(back.roundsTrimmed, 7)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

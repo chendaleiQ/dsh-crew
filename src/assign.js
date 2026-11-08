@@ -86,6 +86,12 @@ export class CrewAssigner {
     if (bot.fault) throw new Error(`这个 Bot 的档案是坏的：${bot.faultReason}`)
     if (bot.cwd === "") throw new Error("这个 Bot 没有工作目录，先在档案里给它一个 cwd")
 
+    // 派活也会往记忆里追加结论；不压的话跑几十次同样会把记忆撑爆。
+    try {
+      await this.registry.compactMemory(bot.id, this.config.memoryLimits ?? {})
+    } catch (error) {
+      this.warn(`dsh-crew: 记忆压缩失败 ${String(error)}`)
+    }
     const memory = await this.registry.readMemory(bot.id)
     const routines = await this.registry.listRoutines(bot.id).catch(() => [])
     // 身份走 system prompt，任务走用户消息：两边不重复。
