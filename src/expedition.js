@@ -19,7 +19,7 @@ import { composeBrief, composeSystemPrompt } from "./persona.js"
 import { effectiveTools } from "./registry.js"
 import { buildRoutine } from "./routine.js"
 import { traceWorthRecording } from "./trace.js"
-import { addDeadEnd, checkAcceptance, decide, recordRound, rollDay } from "./goal.js"
+import { BotGoneError, addDeadEnd, checkAcceptance, decide, recordRound, rollDay } from "./goal.js"
 import { runTurn } from "./turn.js"
 
 /** 两轮之间留一口气，别把宿主和模型接口打个不停。 */
@@ -176,7 +176,7 @@ export class Expedition {
 
   async #loop(botId, maxRounds, run) {
     let goal = rollDay(await this.goals.read(botId))
-    const bot = await this.registry.read(botId)
+    let bot = await this.registry.read(botId)
 
     /**
      * 收尾：**把所有停下来的事实写进目标状态**。
@@ -185,6 +185,17 @@ export class Expedition {
      * 于是收件箱里空空如也，人以为一切正常。停下来的原因必须落盘，否则
      * 「没有需要你的事」就是一句谎话。
      */
+    /** 保存目标；档案被删就返回 false，让循环干净停下而不是崩掉。 */
+    const saveGoal = async (next) => {
+      try {
+        await this.goals.save(next)
+        return true
+      } catch (error) {
+        if (error instanceof BotGoneError || error?.name === "BotGoneError") return false
+        throw error
+      }
+    }
+
     const finished = async (verdict) => {
       // exhausted（轮次用尽）也算 needs-human：它不是"结束了"，是"等你决定还加不加轮"。
       const status =
@@ -195,10 +206,8 @@ export class Expedition {
             : "stopped"
       if (goal.status !== status || (verdict.reason !== "" && goal.note !== verdict.reason)) {
         goal = { ...goal, status, note: verdict.note ?? verdict.reason, updatedAt: new Date().toISOString() }
-        try {
-          await this.goals.save(goal)
-        } catch (error) {
-          this.warn(`dsh-crew: 收尾时写目标失败 ${String(error)}`)
+        if (!(await saveGoal(goal).catch(() => false))) {
+          this.warn("dsh-crew: 收尾时档案已不在，跳过一次写入")
         }
       }
       run.state = status === "done" ? "done" : "stopped"
@@ -213,6 +222,19 @@ export class Expedition {
       if (run.stop) return await finished({ action: "stop", reason: run.stopReason || "你叫停了" })
 
       run.round = round
+      /**
+       * 每一轮都重新读一次档案：
+       * - 档案被删了还继续跑，就是对着一个不存在的 Bot 烧钱，必须立刻停；
+       * - 档案被改了（人格、目录、工具），下一轮要按新设定来，而不是沿用开跑时那份。
+       */
+      try {
+        bot = await this.registry.read(botId)
+      } catch {
+        return await finished({ action: "stop", reason: "这只 Bot 的档案已被删除，停止磨目标" })
+      }
+      if (bot.fault) {
+        return await finished({ action: "stop", reason: `档案读不出来，停止磨目标：${bot.faultReason}` })
+      }
       const before = await checkAcceptance(goal, { cwd: bot.cwd })
       // 每轮开工前顺手压一次记忆：不压缩的话，第 50 轮还在读第 1 轮的流水账。
       try {
@@ -285,7 +307,9 @@ export class Expedition {
       const machineOk = after.checks.filter((check) => check.manual !== true).every((check) => check.ok)
       if (after.ok) {
         goal = { ...goal, status: "done", note: "全部验收通过", updatedAt: new Date().toISOString() }
-        await this.goals.save(goal)
+        if (!(await saveGoal(goal))) {
+          return await finished({ action: "stop", reason: "验收通过，但档案已被删除，结果无处记录" })
+        }
         return await finished({ action: "done", reason: "全部验收通过" })
       }
       if (machineOk && after.manualPending.length > 0) {
@@ -295,11 +319,15 @@ export class Expedition {
           note: `机器能验的都过了，剩下要你：${after.manualPending.join("；")}`,
           updatedAt: new Date().toISOString(),
         }
-        await this.goals.save(goal)
+        if (!(await saveGoal(goal))) {
+          return await finished({ action: "stop", reason: "需要人介入，但档案已被删除" })
+        }
         return await finished({ action: "need-human", reason: goal.note })
       }
 
-      await this.goals.save(goal)
+      if (!(await saveGoal(goal))) {
+        return await finished({ action: "stop", reason: "这只 Bot 的档案已被删除，停止磨目标" })
+      }
       if (run.stop) return await finished({ action: "stop", reason: run.stopReason || "你叫停了" })
       await sleep(this.gapMs)
     }

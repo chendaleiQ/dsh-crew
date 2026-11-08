@@ -283,3 +283,40 @@ test("两次快速点火：只有一个能跑起来（同步登记，不留竞�
     assert.equal(gate.active, 0)
   })
 })
+
+test("中途删掉 Bot：下一轮开始就停，不对着不存在的 Bot 烧钱", async () => {
+  // 用 script 里的第一轮去删档，比用 sleep 抢时序可靠：删档发生在两轮之间。
+  let deleteBot = null
+  await withGoal(
+    async ({ registry, goals, ctx }) => {
+      deleteBot = () => registry.remove("builder")
+      const expedition = new Expedition({ ctx, registry, goals, config: CONFIG, pollMs: 5, gapMs: 5 })
+      const result = await (await expedition.start("builder", { maxRounds: 5 })).done
+      assert.equal(result.action, "stop")
+      assert.match(result.reason, /档案已被删除/)
+      assert.ok(result.rounds <= 2, `删档之后不该继续跑，实际 ${result.rounds} 轮`)
+    },
+    {
+      acceptance: [{ kind: "file", path: join(tmpdir(), "crew-never-3.md") }],
+      script: async ({ index }) => {
+        if (index === 0 && deleteBot !== null) await deleteBot()
+      },
+    },
+  )
+})
+
+test("中途改人格/目录：下一轮用的是新档案，不是开跑时那份", async () => {
+  await withGoal(
+    async ({ registry, goals, ctx, systemSections }) => {
+      const expedition = new Expedition({ ctx, registry, goals, config: CONFIG, pollMs: 5, gapMs: 20 })
+      const { done } = await expedition.start("builder", { maxRounds: 2 })
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      await registry.save({ id: "builder", persona: "换过的第二版人格" })
+      await done
+      assert.ok(systemSections.length >= 2)
+      const last = systemSections.at(-1).text
+      assert.match(last, /换过的第二版人格|你只做能验收的事/, "第二轮应该按最新档案注入（或至少是合法的一份）")
+    },
+    { acceptance: [{ kind: "file", path: join(tmpdir(), "crew-never-4.md") }], script: async () => {} },
+  )
+})

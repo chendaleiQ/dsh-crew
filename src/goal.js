@@ -19,6 +19,20 @@ import { expandPath, normalizeBotId } from "./registry.js"
 /** 目标文件相对 Bot 目录的位置。 */
 export const GOAL_FILE = "goal.json"
 
+/**
+ * 档案已经不存在了。
+ *
+ * 这不是"写失败"，而是"这件事已经没有归属了"——调用方（目标循环）应当据此
+ * 干净地停下来，而不是当成一次 I/O 错误重试或崩掉。
+ */
+export class BotGoneError extends Error {
+  constructor(botId) {
+    super(`Bot ${botId} 的档案已被删除`)
+    this.name = "BotGoneError"
+    this.botId = botId
+  }
+}
+
 /** 连续这么多轮没有实质进展就停：再跑也只是烧钱。 */
 export const MAX_NO_PROGRESS = 3
 
@@ -274,10 +288,18 @@ export class GoalStore {
 
   async save(goal) {
     const target = this.file(goal.botId)
+    // 先确认档案还在：目录被删掉后 mkdir 会把它重建出来，反而制造一个空壳 Bot。
+    if (!(await this.registry.exists(goal.botId))) throw new BotGoneError(goal.botId)
     await mkdir(dirname(target), { recursive: true })
     const temp = `${target}.tmp-${process.pid}-${Date.now()}`
     await writeFile(temp, `${JSON.stringify(goal, null, 2)}\n`, "utf8")
-    await rename(temp, target)
+    try {
+      await rename(temp, target)
+    } catch (error) {
+      // 竞态：写完临时文件、rename 之前目录被删了。
+      if (error?.code === "ENOENT") throw new BotGoneError(goal.botId)
+      throw error
+    }
     return goal
   }
 

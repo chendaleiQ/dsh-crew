@@ -214,9 +214,24 @@ export class BotRegistry {
     return bot
   }
 
-  /** 删档。默认只删档案目录，Bot 的工作目录不动（那是你的东西）。 */
+  /**
+   * 删档。默认只删档案目录，Bot 的工作目录不动（那是你的东西）。
+   *
+   * 带重试：如果这只 Bot 还有活正在写（目标循环正在落盘），目录可能在删除途中
+   * 又冒出文件，`rm` 会抛 ENOTEMPTY。删档不该因为"正好在跑"而失败——那是最可能
+   * 发生删除的时刻。重试几次仍失败才真报错。
+   */
   async remove(id) {
-    await rm(this.botDir(id), { recursive: true, force: true })
+    const dir = this.botDir(id)
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await rm(dir, { recursive: true, force: true })
+        return
+      } catch (error) {
+        if (error?.code !== "ENOTEMPTY" || attempt === 4) throw error
+        await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)))
+      }
+    }
   }
 
   async readMemory(id) {
