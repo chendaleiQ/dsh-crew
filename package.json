@@ -1,6 +1,6 @@
 {
   "name": "@chendaleiq/dsh-crew",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "本机多 Bot 花名册：每个 Bot 有名字、人格、独立工作目录和记忆；一句话派活，结果进收件箱；给一个目标加机器可判定的验收，它一轮轮磨到通过为止。",
   "license": "MIT",

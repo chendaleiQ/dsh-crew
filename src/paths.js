@@ -10,8 +10,9 @@
  * 读取放宽（读文档是正常需求），执行命令不看路径（由 allowBash 单独管）。
  */
 
+import { realpathSync } from "node:fs"
 import { homedir } from "node:os"
-import { isAbsolute, relative, resolve } from "node:path"
+import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 
 /** crew 自己的数据目录：Bot 绝对不该写这里（目标、状态、记忆都在里面）。 */
 export function crewDataDir() {
@@ -24,6 +25,40 @@ export function isInside(target, root) {
   const resolvedRoot = resolve(root)
   const rel = relative(resolvedRoot, resolvedTarget)
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))
+}
+
+/** 能解析就用真实路径，解析不了就原样返回（文件还不存在是常态）。 */
+function realpathOrSelf(path) {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
+
+/**
+ * 把「可能还不存在的目标路径」解析成真实路径。
+ *
+ * 为什么要这么绕：macOS 上 `/tmp` 是 `/private/tmp` 的软链，`/var` 同理。
+ * 只做字符串 resolve 的话，工作目录写着 `/tmp/crew`、模型写到
+ * `/private/tmp/crew/x.md`，就会被判成"目录外"——合法的写入被拦，比不拦更糟。
+ * 做法是向上找到第一个存在的祖先，取它的真实路径，再把剩下的段拼回去。
+ */
+export function resolveRealTarget(target, cwd) {
+  let current = resolve(String(cwd ?? ""), String(target ?? ""))
+  const tail = []
+  for (let depth = 0; depth < 40; depth += 1) {
+    try {
+      const real = realpathSync(current)
+      return tail.length === 0 ? real : join(real, ...tail.reverse())
+    } catch {
+      const parent = dirname(current)
+      if (parent === current) break
+      tail.push(current.slice(parent.length).replace(/^\//u, ""))
+      current = parent
+    }
+  }
+  return resolve(String(cwd ?? ""), String(target ?? ""))
 }
 
 /**
@@ -40,11 +75,12 @@ export function checkWriteTarget({ target, cwd }) {
   if (cwd === undefined || cwd === null || String(cwd).trim() === "") {
     return { ok: false, reason: "这个 Bot 没有工作目录，不允许写文件" }
   }
-  const resolved = resolve(String(cwd), text)
-  if (!isInside(resolved, cwd)) {
+  const root = realpathOrSelf(resolve(String(cwd)))
+  const resolved = resolveRealTarget(text, cwd)
+  if (!isInside(resolved, root)) {
     return { ok: false, reason: `只能在自己的工作目录里写：${cwd}` }
   }
-  if (isInside(resolved, crewDataDir())) {
+  if (isInside(resolved, realpathOrSelf(crewDataDir()))) {
     return { ok: false, reason: "crew 自己的数据目录（目标/状态/记忆）不许 Bot 写" }
   }
   return { ok: true }

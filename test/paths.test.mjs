@@ -10,7 +10,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 
-import { WRITE_TOOLS, checkWriteTarget, crewDataDir, isInside } from "../src/paths.js"
+import { WRITE_TOOLS, checkWriteTarget, crewDataDir, isInside, resolveRealTarget } from "../src/paths.js"
 
 const CWD = "/Users/someone/work/project"
 
@@ -58,4 +58,33 @@ test("写类工具清单包含 write/edit，别漏了改文件这个动作", () 
 
 test("数据目录固定在 ~/.dsh/crew", () => {
   assert.equal(crewDataDir(), join(homedir(), ".dsh", "crew"))
+})
+
+test("软链：工作目录写成 /tmp/x、真实目标是 /private/tmp/x，仍然算目录内", async () => {
+  const { mkdtemp, mkdir, rm, symlink } = await import("node:fs/promises")
+  const { tmpdir } = await import("node:os")
+  const base = await mkdtemp(join(tmpdir(), "crew-link-"))
+  try {
+    const real = join(base, "real")
+    const link = join(base, "link")
+    await mkdir(real)
+    await symlink(real, link)
+
+    // 通过软链写新文件：目标还不存在，必须按真实路径判
+    const verdict = checkWriteTarget({ target: join(link, "new.md"), cwd: link })
+    assert.equal(verdict.ok, true, "软链内的新文件不该被拦")
+
+    // 真实路径与软链路径混着用也一样
+    assert.equal(checkWriteTarget({ target: join(real, "other.md"), cwd: link }).ok, true)
+    assert.equal(checkWriteTarget({ target: join(link, "x.md"), cwd: real }).ok, true)
+
+    // 软链外面还是不许写
+    assert.equal(checkWriteTarget({ target: join(base, "escape.md"), cwd: link }).ok, false)
+
+    // resolveRealTarget 对已存在与不存在的路径都给出一致结果（按真实路径，含 /var → /private/var）
+    const { realpathSync } = await import("node:fs")
+    assert.equal(resolveRealTarget("new.md", link), join(realpathSync(real), "new.md"))
+  } finally {
+    await rm(base, { recursive: true, force: true })
+  }
 })

@@ -137,7 +137,7 @@ export async function runTurn({
   /** 这一轮实际调用了哪些工具——routine 录制靠它，不靠模型复述。 */
   let trace = null
   /** 记录「身份注入」和「工具白名单」到底有没有真的生效；失败要能被上层看到。 */
-  const toolPolicy = { systemPrompt: "empty", restrict: "unrestricted", guard: "unrestricted" }
+  const toolPolicy = { preset: "empty", systemPrompt: "empty", restrict: "unrestricted", guard: "unrestricted" }
   try {
     const handle = await ctx.agents.create({
       sessionId,
@@ -148,7 +148,31 @@ export async function runTurn({
        * 身份进 system prompt，工具白名单走 tools.restrict。
        * 任何一步挂了都要**说出来**——白名单静默失效比没有白名单更危险。
        */
-      setup: (agentCtx) => {
+      setup: async (agentCtx) => {
+        /**
+         * 必须显式挂载 agent preset。
+         *
+         * `meta.agentPreset` 只是记了个名字，**不会**把 read/write/bash 这些工具挂到
+         * 新会话上——真实测试里模型就是这么发现"我没有文件工具"的。Dot 也是显式调
+         * `agentPresets.mount()` 的，照抄这个做法。
+         */
+        if (preset !== "") {
+          try {
+            const presets = ctx.get?.("agentPresets")
+            if (typeof presets?.mount === "function") {
+              await presets.mount(agentCtx, preset)
+              toolPolicy.preset = "mounted"
+            } else {
+              toolPolicy.preset = "unavailable: 宿主没有 agentPresets.mount"
+            }
+          } catch (error) {
+            toolPolicy.preset = `failed: ${errText(error)}`
+            log(`crew: preset 挂载失败 ${toolPolicy.preset}`)
+          }
+        } else {
+          toolPolicy.preset = "empty"
+        }
+
         // 身份：写进 system prompt。成功要明确记 "applied"——不然「没报错」和「没做」分不清。
         if (systemText !== "") {
           if (typeof agentCtx?.systemPrompt?.section !== "function") {
