@@ -285,8 +285,14 @@ export class BotRegistry {
   }
 
   routineFile(id, slug) {
-    const safe = String(slug ?? "").replace(/[^a-z0-9-]/gu, "")
-    if (safe === "") throw new Error("routine 的 slug 不合法")
+    const raw = String(slug ?? "")
+    const safe = raw.replace(/[^a-z0-9-]/gu, "")
+    /**
+     * 严格校验而不是清洗：`../escape` 清洗后是 `escape`，看着"安全"了，
+     * 实际是把你的意图悄悄改掉（你以为是那个文件，写的是另一个）。这类静默改名
+     * 比直接报错危险得多，所以只要不是原样合法就拒。
+     */
+    if (safe === "" || safe !== raw) throw new Error(`routine 的 slug 不合法：${JSON.stringify(raw)}`)
     return join(this.routinesDir(id), `${safe}.md`)
   }
 
