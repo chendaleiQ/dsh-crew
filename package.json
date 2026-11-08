@@ -50,7 +50,7 @@
     "macos"
   ],
   "scripts": {
-    "test": "node --test test/registry.test.mjs test/persona.test.mjs test/assign.test.mjs test/goal.test.mjs test/expedition.test.mjs test/inbox.test.mjs test/memory.test.mjs test/routine.test.mjs test/client.test.mjs test/package.test.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
     "smoke": "bash scripts/smoke.sh"
   },
   "icon": "./icon.svg",

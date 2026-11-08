@@ -57,6 +57,30 @@ export class CrewAssigner {
    */
   async start({ botId, task, extra = "", onProgress = () => {} }) {
     if (!this.available()) throw new Error("宿主没有 agents 服务，无法派活")
+    /**
+     * 先同步占位，再做任何 await。
+     *
+     * 之前是「await 读档案 → 再占位」，两个请求几乎同时进来会都通过检查，
+     * 于是并发上限形同虚设（双倍烧钱）。占位必须在第一个 await 之前完成；
+     * 中途任何一步失败都要把额度还回去。
+     */
+    const taskId = randomUUID()
+    if (this.gate !== null) this.gate.acquire(taskId)
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      if (this.gate !== null) this.gate.release(taskId)
+    }
+    try {
+      return await this.#startWithSlot({ botId, task, extra, onProgress, taskId, release })
+    } catch (error) {
+      release()
+      throw error
+    }
+  }
+
+  async #startWithSlot({ botId, task, extra, onProgress, taskId, release }) {
 
     const bot = await this.registry.read(botId)
     if (bot.fault) throw new Error(`这个 Bot 的档案是坏的：${bot.faultReason}`)
@@ -68,7 +92,6 @@ export class CrewAssigner {
     const system = composeSystemPrompt({ bot, memory, routines })
     const { brief } = composeBrief({ bot, memory, task, extra, includeIdentity: false })
 
-    const taskId = randomUUID()
     const sessionId = `crew-${bot.id}-${taskId.slice(0, 8)}`
     const entry = { botId: bot.id, sessionId, taskId, task, cancelled: false }
 
@@ -82,14 +105,12 @@ export class CrewAssigner {
       result: "",
       error: "",
     })
-    // 并发额度由「派活 + 目标循环」共享：各自计数会让上限翻倍。
-    if (this.gate !== null) this.gate.acquire(taskId)
     this.running.set(taskId, entry)
     onProgress({ phase: "created", taskId, sessionId })
 
     const done = this.#run({ entry, bot, brief, system, memoryClipped: system.memoryClipped }).finally(() => {
       this.running.delete(taskId)
-      if (this.gate !== null) this.gate.release(taskId)
+      release()
     })
 
     return { taskId, sessionId, done }

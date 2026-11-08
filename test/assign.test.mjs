@@ -402,3 +402,36 @@ test("宿主没有 agents 服务时，available() 是 false 且给出人话错�
     await assert.rejects(() => assigner.start({ botId: "writer", task: "x" }), /没有 agents 服务/)
   })
 })
+
+test("并发占位在第一个 await 之前：同时打两次只会有一个拿到额度", async () => {
+  await withCrew(async ({ registry }) => {
+    const { ctx } = makeCtx({ scripts: ["hang", "hang"] })
+    const gate = new Gate(1)
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, gate, pollMs: 5 })
+    // 不 await 第一条，立刻打第二条——这正是「两次快速点击」的形状
+    const first = assigner.start({ botId: "writer", task: "第一件" })
+    const second = assigner.start({ botId: "writer", task: "第二件" })
+    const settled = await Promise.allSettled([first, second])
+    const rejected = settled.filter((item) => item.status === "rejected")
+    assert.equal(rejected.length, 1, "必须有一个被并发上限挡住")
+    assert.match(String(rejected[0].reason?.message ?? rejected[0].reason), /并发已满/)
+
+    const accepted = settled.find((item) => item.status === "fulfilled").value
+    await assigner.cancel(accepted.taskId)
+    await accepted.done
+    assert.equal(gate.active, 0)
+  })
+})
+
+test("校验失败要把额度还回去（否则一次失败就永久少一个额度）", async () => {
+  await withCrew(async ({ registry }) => {
+    const { ctx } = makeCtx()
+    const gate = new Gate(1)
+    const assigner = new CrewAssigner({ ctx, registry, config: CONFIG, gate, pollMs: 5 })
+    await assert.rejects(() => assigner.start({ botId: "writer", task: "" }), /需要一句具体任务/)
+    assert.equal(gate.active, 0, "抛错后额度必须回到 0")
+    // 还能正常派活，说明额度没被吃掉
+    const ok = await assigner.start({ botId: "writer", task: "正常" })
+    await ok.done
+  })
+})

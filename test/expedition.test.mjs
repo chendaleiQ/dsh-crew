@@ -17,6 +17,7 @@ import { join } from "node:path"
 import test from "node:test"
 
 import { Expedition, classify } from "../src/expedition.js"
+import { Gate } from "../src/gate.js"
 import { buildInbox } from "../src/inbox.js"
 import { GoalStore } from "../src/goal.js"
 import { BotRegistry } from "../src/registry.js"
@@ -264,4 +265,21 @@ test("classify：没产出算 empty，产出但验收没变好算 no-progress", 
   assert.equal(classify({ state: "done", result: "说话了" }, before, better), "progress")
   assert.equal(classify({ state: "done", result: "" }, before, same), "empty")
   assert.equal(classify({ state: "failed", result: "x" }, before, better), "error")
+})
+
+test("两次快速点火：只有一个能跑起来（同步登记，不留竞态窗口）", async () => {
+  await withGoal(async ({ registry, goals, ctx }) => {
+    const gate = new Gate(1)
+    const expedition = new Expedition({ ctx, registry, goals, config: CONFIG, gate, pollMs: 5, gapMs: 5 })
+    const first = expedition.start("builder", { maxRounds: 2 })
+    const second = expedition.start("builder", { maxRounds: 2 })
+    const settled = await Promise.allSettled([first, second])
+    const rejected = settled.filter((item) => item.status === "rejected")
+    assert.equal(rejected.length, 1, "第二次点火必须被拒")
+    assert.match(String(rejected[0].reason?.message ?? rejected[0].reason), /已经在磨目标|并发已满/)
+    const accepted = settled.find((item) => item.status === "fulfilled").value
+    expedition.stop("builder")
+    await accepted.done
+    assert.equal(gate.active, 0)
+  })
 })

@@ -122,7 +122,30 @@ export class Expedition {
    */
   async start(botId, { maxRounds = 20 } = {}) {
     if (!this.available()) throw new Error("宿主没有 agents 服务，无法跑目标")
+    /**
+     * 双开守卫必须同步生效：先登记，再 await 读文件。
+     * 之前是「await 读完 → 再登记」，两次快速点火会都通过检查，然后并行烧钱。
+     */
     if (this.status(botId).running) throw new Error("这个 Bot 已经在磨目标了")
+    const run = { stop: false, round: 0, state: "running", stopReason: "" }
+    this.runs.set(botId, run)
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      if (this.gate !== null) this.gate.release(botId)
+    }
+    try {
+      if (this.gate !== null) this.gate.acquire(botId)
+      return await this.#startChecked(botId, { maxRounds, run, release })
+    } catch (error) {
+      if (this.runs.get(botId) === run) this.runs.delete(botId)
+      release()
+      throw error
+    }
+  }
+
+  async #startChecked(botId, { maxRounds, run, release }) {
 
     const bot = await this.registry.read(botId)
     if (bot.cwd === "") throw new Error("这个 Bot 没有工作目录，目标无处落地")
@@ -133,12 +156,9 @@ export class Expedition {
       throw new Error("目标没有验收条件，我无法判断做到没有——先补上验收再点火")
     }
 
-    if (this.gate !== null) this.gate.acquire(botId)
-    const run = { stop: false, round: 0, state: "running", stopReason: "" }
-    this.runs.set(botId, run)
     const done = this.#loop(botId, maxRounds, run).finally(() => {
       run.state = run.state === "running" ? "stopped" : run.state
-      if (this.gate !== null) this.gate.release(botId)
+      release()
     })
     return { accepted: true, done }
   }

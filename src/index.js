@@ -16,6 +16,7 @@ import { CrewAssigner } from "./assign.js"
 import { Expedition } from "./expedition.js"
 import { GoalStore } from "./goal.js"
 import { Gate } from "./gate.js"
+import { isOwnOrigin } from "./origin.js"
 import { buildInbox, inboxSummary } from "./inbox.js"
 
 export const name = "@chendaleiq/dsh-crew"
@@ -104,28 +105,18 @@ function answer(response, status, payload) {
   response.end(body)
 }
 
-/**
- * 判断请求是不是「本机页面发来的」。
- *
- * 这套路由只服务于 DSH 自己的渲染进程，所以不额外发 token：宿主 web server
- * 只绑 loopback，且连接本身已经过宿主准入。这里再挡一层，拒掉带外站 Origin
- * 的请求，避免别的本地页面顺手改你的花名册。
- */
+/** 取宿主自己的 origin；取不到就交给 isOwnOrigin 的兜底规则。 */
+function ownOriginOf(server) {
+  try {
+    return typeof server?.getOrigin === "function" ? server.getOrigin() : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 判断请求是不是「本机页面发来的」——规则与测试都在 src/origin.js。 */
 function fromOwnOrigin(request, server) {
-  const origin = request.headers.origin
-  if (typeof origin !== "string" || origin === "" || origin === "null") return true
-  let own
-  try {
-    own = typeof server.getOrigin === "function" ? server.getOrigin() : undefined
-  } catch {
-    own = undefined
-  }
-  if (typeof own !== "string" || own === "") return true
-  try {
-    return new URL(origin).origin === new URL(own).origin
-  } catch {
-    return false
-  }
+  return isOwnOrigin(request, ownOriginOf(server))
 }
 
 export function apply(ctx, rawConfig = {}) {
