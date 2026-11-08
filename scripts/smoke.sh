@@ -46,14 +46,24 @@ for _ in $(seq 1 80); do
   ready && break
   sleep 0.5
 done
-ready || { echo "实例没起来，见 $LOG" >&2; exit 1; }
+ready || { echo "实例没起来，见 ${LOG}" >&2; exit 1; }
 echo "起来了"
 
-TOKEN=$(grep -o "token=[A-Za-z0-9_-]*" "$LOG" | head -1 | cut -d= -f2)
+# token 那行比端口就绪晚一点写进日志，所以这里要等——否则第 5 步会拿 401 页面瞎猜。
+TOKEN=""
+for _ in $(seq 1 40); do
+  TOKEN=$(grep -o "token=[A-Za-z0-9_-]*" "$LOG" 2>/dev/null | head -1 | cut -d= -f2)
+  [ -n "$TOKEN" ] && break
+  sleep 0.25
+done
+if [ -z "$TOKEN" ]; then
+  echo "拿不到 web token（见 $LOG），后面所有接口都会 401，先停" >&2
+  exit 1
+fi
 if [ -n "$TOKEN" ]; then
   echo "面板地址：$BASE/?token=$TOKEN"
 else
-  echo "（没抓到 token，见 $LOG）"
+  echo "（没抓到 token，见 ${LOG}）"
 fi
 
 WORK="$REPO_DIR/.smoke-work"
