@@ -1,5 +1,28 @@
 # 装到哪儿、怎么装、怎么撤
 
+## 现在的状态（2026-11-08）
+
+- **GitHub 已发布**：<https://github.com/chendaleiQ/dsh-crew>，CI 绿
+- **npm 未发布**：`@chendaleiq/dsh-crew` 还没推上去。原因是本机 npm 凭据失效
+  （`npm whoami` → 401，直连 registry 也是 401）。**代码和打包都没问题**，
+  只差一次登录或一次 trusted publishing 配置。
+- 在 npm 发布之前，用 GitHub 装（已验证可行，见下）
+
+## 从 GitHub 装（现在就能用）
+
+```bash
+dsh plugin --profile <profile> add github:chendaleiQ/dsh-crew
+```
+
+## 升级与回滚
+
+- **升级**：重跑同一条 `add` 命令即可（pnpm 会拉最新提交）。
+- **回滚**：`dsh plugin --profile <profile> add github:chendaleiQ/dsh-crew#<commit>`，
+  commit 号在仓库提交历史里；或装回上一个 tag。
+- **数据不受影响**：Bot 档案全在 `~/.dsh/crew/`，升级/重装/卸载都不动它。
+  真的要清空才 `rm -rf ~/.dsh/crew`。
+- **回滚代码但保留数据**是安全的：数据格式只往后兼容，老版本读到新字段会忽略。
+
 ## 三种安装位置
 
 | 位置 | 用途 | 怎么装 |
